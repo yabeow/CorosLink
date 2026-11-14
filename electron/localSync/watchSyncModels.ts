@@ -49,9 +49,9 @@ export const SATELLITE_FORMAT_MODELS: Readonly<Record<CepFormat, ReadonlySet<Wat
  * Reading (EXPERIMENTAL_SYNC_MODELS) and each write are kept as separate lists on
  * purpose: each is checked on its own, so a new model can be read
  * from before anything is written to it. The five models pass every check except USB access and
- * area maps, which the PACE 3's build wasn't checked for.
+ * area maps, which the PACE 3's build wasn't checked for, and firmware updates (PACE 4 only).
  */
-export type WatchFeature = "settings" | "profile" | "clockFormat" | "weather" | "workouts" | "calendar" | "satelliteData" | "usbAccess" | "areaMaps";
+export type WatchFeature = "settings" | "profile" | "clockFormat" | "weather" | "workouts" | "calendar" | "satelliteData" | "usbAccess" | "areaMaps" | "firmware";
 
 export const WATCH_FEATURE_MODELS: Readonly<Record<WatchFeature, ReadonlySet<WatchModelId>>> = {
   /** System switches (settings 0 and 31) written from Watch settings. */
@@ -78,7 +78,12 @@ export const WATCH_FEATURE_MODELS: Readonly<Record<WatchFeature, ReadonlySet<Wat
    * Per-area maps copied to the watch's drive (Map/VSM and Map/VCM, the layout the Wi-Fi download
    * leaves). The four watches whose 3.2008.0 firmware reads them; copied and shown on a PACE 4.
    */
-  areaMaps: new Set(["pace-4", "pace-4-pro", "pace-pro", "apex-4"])
+  areaMaps: new Set(["pace-4", "pace-4-pro", "pace-pro", "apex-4"]),
+  /**
+   * Firmware updates (OTA 0x94 and SendFile, corosFirmwareProtocol.ts), traced in the PACE 4 3.2008.0 firmware.
+   * The PACE 4 Pro, PACE Pro and APEX 4 builds have their own component lists and staging areas.
+   */
+  firmware: new Set(["pace-4"])
 };
 
 export function watchTakesSatelliteFormat(format: CepFormat, model: WatchModelId | undefined): boolean {

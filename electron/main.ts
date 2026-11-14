@@ -24,7 +24,7 @@ import { googleCalendar, startGoogleCalendarSync, stopGoogleCalendarSync } from 
 import type { GoogleCalendarConfigInput } from "./googleCalendarTypes";
 import { appleCalendar, startAppleCalendarSync, stopAppleCalendarSync } from "./appleCalendarService";
 import type { AppleCalendarCredentials, CalendarSyncSettings } from "./calendarSyncTypes";
-import type { OpenDialogOptions } from "electron";
+import type { MessageBoxOptions, OpenDialogOptions } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1258,7 +1258,34 @@ let wifiMusicQuitPending = false;
 let wifiMusicQuitReady = false;
 let watchWorkQuitPending = false;
 let watchWorkQuitReady = false;
+let firmwareQuitAsking = false;
+let firmwareQuitConfirmed = false;
+
+/** Asks before Quit or Disconnect stops a firmware transfer; true to stop it. */
+async function confirmStopFirmwareUpdate(stop: "quit" | "disconnect"): Promise<boolean> {
+  const options: MessageBoxOptions = {
+    type: "warning", noLink: true, defaultId: 0, cancelId: 0,
+    buttons: [nativeText("Keep updating"), nativeText(stop === "quit" ? "Stop and quit" : "Stop and disconnect")],
+    message: nativeText("Stop the firmware update?"),
+    detail: nativeText("Your watch keeps what it has received. Select Update watch in Settings → Watch firmware to finish the update.")
+  };
+  const result = mainWindow && !mainWindow.isDestroyed() ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
+  return result.response === 1;
+}
+
 app.on("before-quit", event => {
+  // A firmware transfer can take an hour; quitting stops it, so the user is asked first.
+  if (!firmwareQuitConfirmed && corosNativeBle.firmwareUpdateRunning()) {
+    event.preventDefault();
+    if (!firmwareQuitAsking) {
+      firmwareQuitAsking = true;
+      void confirmStopFirmwareUpdate("quit").then(stop => {
+        firmwareQuitAsking = false;
+        if (stop) { firmwareQuitConfirmed = true; app.quit(); }
+      }, () => { firmwareQuitAsking = false; });
+    }
+    return;
+  }
   if (!wifiMusicQuitReady && corosNativeBle.isWifiMusicActive()) {
     event.preventDefault();
     if (!wifiMusicQuitPending) {
@@ -1378,7 +1405,14 @@ function registerIpcHandlers(): void {
       return result.response === 1;
     });
   });
-  ipcMain.handle("corosBle:disconnect", () => corosNativeBle.disconnect());
+  ipcMain.handle("corosBle:disconnect", async () => {
+    // Disconnecting stops a firmware transfer, so the user is asked first.
+    if (corosNativeBle.firmwareUpdateRunning()) {
+      if (!(await confirmStopFirmwareUpdate("disconnect"))) return corosNativeBle.status();
+      corosNativeBle.cancelFirmwareUpdate();
+    }
+    return corosNativeBle.disconnect();
+  });
   // The QR carries the watch account key itself, so only the main window may ask for it.
   ipcMain.handle("corosBle:phonePairing", event => {
     mainWindowSender(event, "iPhone pairing");
@@ -1458,6 +1492,29 @@ function registerIpcHandlers(): void {
     return corosNativeBle.syncWatchface(previewId, target);
   });
   ipcMain.handle("corosBle:watchfaceCancel", () => corosNativeBle.cancelWatchfaceSync());
+  ipcMain.handle("corosBle:firmwareStatus", () => corosNativeBle.firmwareUpdateStatus());
+  ipcMain.handle("corosBle:firmwareCheck", event => {
+    mainWindowSender(event, "firmware update");
+    return corosNativeBle.checkFirmwareUpdate();
+  });
+  // Starts only after the user confirms here, natively, the version the check offered. Resolves once
+  // the update has started (or null when declined); its progress comes from corosBle:firmwareStatus.
+  ipcMain.handle("corosBle:firmwareInstall", async (event, checkId: unknown) => {
+    const owner = mainWindowSender(event, "firmware update");
+    const offer = typeof checkId === "string" ? corosNativeBle.offeredFirmware(checkId) : undefined;
+    if (typeof checkId !== "string" || !offer) throw new Error("Check for updates, then try again.");
+    const minutes = (seconds: number) => String(Math.max(1, Math.ceil(seconds / 60)));
+    const result = await dialog.showMessageBox(owner, {
+      type: "info", buttons: [nativeText("Update watch"), nativeText("Cancel")], defaultId: 0, cancelId: 1, noLink: true,
+      message: nativeText("Update your watch to firmware {{p0}}?").replace("{{p0}}", offer.version),
+      detail: offer.transferSeconds && offer.installSeconds
+        ? nativeText("Sending the update takes about {{p0}} min. Keep your watch nearby and off its charger until then. Your watch then restarts to install it, which takes about {{p1}} min.")
+          .replace("{{p0}}", minutes(offer.transferSeconds)).replace("{{p1}}", minutes(offer.installSeconds))
+        : nativeText("Keep your watch nearby and off its charger until the transfer ends. Your watch then restarts to install the update.")
+    });
+    return result.response === 0 ? corosNativeBle.startFirmwareUpdate(checkId) : null;
+  });
+  ipcMain.handle("corosBle:firmwareCancel", () => corosNativeBle.cancelFirmwareUpdate());
   ipcMain.handle("corosBle:compilerStatus", () => getCorosWatchfaceCompiler().status());
   ipcMain.handle("corosBle:compileWatchface", async (_event, compileOptions?: { fullColor?: unknown; smoothEdges?: unknown }) => {
     const options: OpenDialogOptions = { title: "Compile a custom watch face to BIN", properties: ["openFile"],

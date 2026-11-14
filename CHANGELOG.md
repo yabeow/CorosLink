@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Update your PACE 4's firmware over Bluetooth (beta).** Settings → Watch firmware checks COROS for your watch's next firmware update and installs it over this computer's Bluetooth, without the COROS app (you still sign in to COROS in Watch Faces). Only the parts that changed are sent; large updates can take an hour, so CorosLink shows how long, keeps the computer awake and asks before Quit or Disconnect stops it. If a transfer stops, starting again skips what your watch already has. Your watch needs at least 30% battery and has to be off its charger; if it can't update right now, for example because it's recording an activity, CorosLink says what to do and never tells it to install until it can. After the watch restarts, reconnect it to see the result. For a PACE 4 already on firmware 3.2008.0 or newer; other watches and older firmware update with the COROS app.
+
 ## [0.1.77] - 2026-11-11
 
 ### Added

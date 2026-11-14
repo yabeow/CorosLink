@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Code2,
   Coffee,
+  Cpu,
   Dumbbell,
   Ellipsis,
   ExternalLink,
@@ -49,6 +50,7 @@ import { PrivacySettings } from "./PrivacySettings";
 import { WatchProfileSettings } from "./WatchProfileSettings";
 import { WeatherLocationSettings } from "./WeatherLocationSettings";
 import { WATCH_SETTING_LABELS, WatchSystemSettings } from "./WatchSystemSettings";
+import { WatchFirmwareSettings } from "./WatchFirmwareSettings";
 import { LanguageSettings } from "./LanguageSettings";
 import { SidebarSettings } from "./SidebarSettings";
 import { WatchfaceAutomationSettings } from "./WatchfaceAutomationSettings";
@@ -73,6 +75,7 @@ const PANE_ICONS: Record<SettingsPane, LucideIcon> = {
   sidebar: PanelLeft,
   profile: HeartPulse,
   watch: SlidersHorizontal,
+  firmware: Cpu,
   weather: CloudSun,
   accounts: UserRound,
   ai: PlugZap,
@@ -169,6 +172,8 @@ interface SettingsViewProps {
   onError: (message: string) => void;
   initialAccountScreen?: boolean;
   onOpenAccount?: (destination: AccountDestination) => void;
+  /** Watch Faces, where the COROS sign-in that firmware updates use lives. */
+  onOpenWatchfaces?: () => void;
   showDevelopmentItems?: boolean;
 }
 
@@ -179,6 +184,7 @@ export function SettingsView({
   onCheckForUpdates,
   onError,
   onOpenAccount,
+  onOpenWatchfaces,
   initialAccountScreen = false,
   focusSection,
   onSectionFocused,
@@ -499,6 +505,7 @@ export function SettingsView({
         {pane === "sidebar" ? <SettingsAnchor section="sidebar"><SidebarSettings showDevelopmentItems={showDevelopmentItems} /></SettingsAnchor> : null}
         {pane === "profile" ? <WatchProfileSettings api={api} /> : null}
         {pane === "watch" ? <SettingsAnchor section="watch"><WatchSystemSettings api={api} /></SettingsAnchor> : null}
+        {pane === "firmware" ? <WatchFirmwareSettings api={api} onSignIn={onOpenWatchfaces} /> : null}
         {pane === "weather" ? <SettingsAnchor section="weather"><WeatherLocationSettings api={api} /></SettingsAnchor> : null}
         {pane === "accounts" && onOpenAccount ? <AccountsSettings api={api} onOpenAccount={onOpenAccount} /> : null}
         {pane === "ai" ? <><WatchfaceAutomationSettings api={api} /><WorkoutAutomationSettings api={api} /></> : null}

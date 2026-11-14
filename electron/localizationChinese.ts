@@ -90,4 +90,14 @@ export const nativeChinese: Readonly<Record<string, string>> = {
   "In the backup: key {{p0}}, {{p1}}.": "备份中：密钥 {{p0}}，{{p1}}。",
   "COROS account {{p0}}": "COROS 账户 {{p0}}",
   "You're signed in to COROS with another account. Restoring signs you out, so one account's key is never used with another's sign-in.": "您已使用另一个 COROS 账户登录。恢复后将退出该账户，以免一个账户的密钥与另一个账户的登录混用。",
+  // Firmware update confirmations (main.ts).
+  "Update watch": "更新手表",
+  "Update your watch to firmware {{p0}}?": "要将手表更新到固件 {{p0}} 吗？",
+  "Sending the update takes about {{p0}} min. Keep your watch nearby and off its charger until then. Your watch then restarts to install it, which takes about {{p1}} min.": "发送更新约需 {{p0}} 分钟。在此期间，请将手表放在附近，且不要连接充电器。之后手表会重启并安装更新，约需 {{p1}} 分钟。",
+  "Keep your watch nearby and off its charger until the transfer ends. Your watch then restarts to install the update.": "传输完成前，请将手表放在附近，且不要连接充电器。之后手表会重启并安装更新。",
+  "Stop the firmware update?": "要停止固件更新吗？",
+  "Your watch keeps what it has received. Select Update watch in Settings → Watch firmware to finish the update.": "手表会保留已收到的内容。请在“设置 → 手表固件”中选择“更新手表”完成更新。",
+  "Keep updating": "继续更新",
+  "Stop and quit": "停止并退出",
+  "Stop and disconnect": "停止并断开连接",
 };

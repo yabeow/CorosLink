@@ -188,7 +188,7 @@ export function PrivacySettings({ api }: { api: CorosLinkApi }) {
           </label>
           <p className="settings-hint">{t("Local-Only Mode starts empty: it shows what you sync from the watch or import. Your COROS workouts, calendar and activities stay in your COROS account and show again in Connected Mode.")}</p>
           <p className="settings-hint">{t("Data already uploaded to COROS stays in your COROS account. To keep new data off COROS, turn off the watch's Wi-Fi and don't sync it with the COROS app.")}</p>
-          <p className="settings-hint">{t("Without COROS, Strava and TrainingPeaks stop receiving your activities, and the watch gets no firmware updates.")}</p>
+          <p className="settings-hint">{t("Without COROS, Strava and TrainingPeaks stop receiving your activities. Watch firmware updates still work while you're signed in to COROS.")}</p>
           <div className="privacy-actions">
             <button type="button" className="primary-button" disabled={busy !== null} onClick={() => void activate()}>
               {busy === "mode" ? <Loader2 size={15} className="spin" aria-hidden="true" /> : <ShieldCheck size={15} aria-hidden="true" />}

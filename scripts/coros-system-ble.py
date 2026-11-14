@@ -7,7 +7,7 @@ removes a Windows pairing the watch no longer honours (CorosLink 0.1.57 and
 JSON operations arrive only over Electron's private stdin. This worker never
 receives account keys. Notifications and control replies stay in the parent pipe.
 It supports the same operations as the macOS CoreBluetooth helper
-(native/corebluetooth/main.swift), apart from the development-only OTA blocks.
+(native/corebluetooth/main.swift).
 """
 import asyncio
 import base64
@@ -23,7 +23,7 @@ import traceback
 from bleak import BleakClient, BleakScanner
 from bleak.exc import BleakBluetoothNotAvailableError, BleakError, BleakGATTProtocolError, BleakGATTProtocolErrorCode
 from coros_ble_protocol import Decoder, ProtocolError, frames
-from coros_ble_route import DATA_FILES, MUSIC_DELETE_FILE, ROUTE_FILE, WATCHFACE_FILE, send_file_block
+from coros_ble_route import DATA_FILES, MUSIC_DELETE_FILE, ROUTE_FILE, WATCHFACE_FILE, send_file_block, send_firmware_block
 from coros_ble_music import MusicDeleteReceiver, MusicPageReceiver, decode_usb_access, decode_watch_interaction
 from coros_ble_activity import SyncBlockReceiver
 
@@ -157,6 +157,8 @@ class SystemSession:
         self.queue = None
         # Music inventory reads listen on control and bulk: (is_control, bytes).
         self.music_queue = None
+        # So do firmware blocks (the watch acknowledges each window of data on bulk).
+        self.firmware_queue = None
         self.interaction_sequence = 0
         self.capture = None
         self.capture_chars = 0
@@ -177,6 +179,8 @@ class SystemSession:
             self.queue.put_nowait(None)
         if self.music_queue is not None and not self.music_queue.full():
             self.music_queue.put_nowait(None)
+        if self.firmware_queue is not None and not self.firmware_queue.full():
+            self.firmware_queue.put_nowait(None)
 
     async def discover(self, name=None, pinned=None, serial=None):
         results = {}
@@ -364,6 +368,8 @@ class SystemSession:
             return
         if channel['name'] in ('control', 'bulk') and self.music_queue is not None and not self.music_queue.full():
             self.music_queue.put_nowait((channel['name'] == 'control', bytes(data)))
+        if channel['name'] in ('control', 'bulk') and self.firmware_queue is not None and not self.firmware_queue.full():
+            self.firmware_queue.put_nowait((channel['name'] == 'control', bytes(data)))
         if channel['name'] != 'control':
             return
         event = decode_watch_interaction(data)
@@ -374,7 +380,7 @@ class SystemSession:
         if self.queue is not None and not self.queue.full():
             self.queue.put_nowait(bytes(data))
 
-    async def exchange(self, payload, maximum, opcode=0xa5):
+    async def exchange(self, payload, maximum, opcode=0xa5, timeout=15):
         if not self.client or not self.client.is_connected or self.write is None:
             raise ProtocolError('The watch is disconnected.')
         self.queue = asyncio.Queue(maxsize=64)
@@ -392,7 +398,8 @@ class SystemSession:
                     result = decoder.accept(value)
                     if result is not None:
                         return result
-            return await asyncio.wait_for(receive(), 15)
+            # Most answers are immediate; a firmware check reads every component from storage first.
+            return await asyncio.wait_for(receive(), timeout)
         finally:
             self.queue = None
 
@@ -453,6 +460,19 @@ class SystemSession:
 
     async def route_block(self, header, block):
         await self.file_block(header, block, ROUTE_FILE)
+
+    async def firmware_block(self, header, block, file_index):
+        """One block of a firmware component; True when the watch already held it."""
+        bulk = self.connected_channels()
+        self.firmware_queue = asyncio.Queue(maxsize=256)
+        try:
+            async def data(value):
+                await self.write_bulk(bulk, value)
+            return await send_firmware_block(header, block, self.firmware_queue, self.write_control, data,
+                                             min(self.write.max_write_without_response_size, bulk.max_write_without_response_size, 240),
+                                             file_index)
+        finally:
+            self.firmware_queue = None
 
     async def send_notification(self, encoded):
         """CorosLink's notification fragments (0x79), already built in Electron; checked like the macOS helper."""
@@ -617,7 +637,9 @@ async def main():
                     result = await session.refresh()
                 elif operation == 'exchange':
                     data = base64.b64decode(request['payload'], validate=True)
-                    response = await session.exchange(data, request['maximumWriteBytes'], request.get('opcode', 0xa5))
+                    timeout = request.get('timeoutSeconds', 15)
+                    timeout = min(max(timeout, 5), 120) if isinstance(timeout, int) and not isinstance(timeout, bool) else 15
+                    response = await session.exchange(data, request['maximumWriteBytes'], request.get('opcode', 0xa5), timeout)
                     result = session.state
                     extra['payload'] = base64.b64encode(response).decode()
                 elif operation in FILE_OPERATIONS or operation == 'dataFileBlock':
@@ -630,6 +652,12 @@ async def main():
                     result = session.state
                     if reply is not None:
                         extra['payload'] = base64.b64encode(reply).decode()
+                elif operation == 'firmwareBlock':
+                    held = await session.firmware_block(base64.b64decode(request['header'], validate=True),
+                                                        base64.b64decode(request['block'], validate=True),
+                                                        request.get('fileId'))
+                    result = session.state
+                    extra['payload'] = base64.b64encode(bytes([1 if held else 0])).decode()
                 elif operation == 'sendNotification':
                     await session.send_notification(request.get('frames'))
                     result = session.state

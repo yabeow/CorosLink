@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { app, nativeImage, safeStorage } from "electron";
 import { deleteSettings, getSetting, setSetting } from "./database";
+import { FIRMWARE_QUERY_APP_VERSION, firmwareQueryAppVersion } from "./corosFirmwareProtocol";
 import {
   clearStoredCorosCredentials,
   getStoredCorosCredentials,
@@ -1498,6 +1499,29 @@ export async function fetchCorosWeatherStruct(
       ? summarizeForecast(decodeWeatherMessage("WeatherForecastUI", Buffer.from(weather, "base64")))
       : null
   };
+}
+
+/**
+ * The firmware COROS offers a watch model running `firmwareVersion`: the mobile
+ * `ota/query` the phone app makes (a read; it sends the model and version only).
+ * Returns the response's `data`, normalized by corosFirmwareProtocol.ts.
+ */
+export async function queryCorosFirmware(input: { firmwareType: string; firmwareVersion: string }): Promise<unknown> {
+  const session = requireSession();
+  const query = async (appVersion: string) => (await mobileRequest<unknown>("/ota/query", {
+    method: "POST",
+    accessToken: session.accessToken,
+    includeAccessTokenInQuery: false,
+    userId: session.userId,
+    body: JSON.stringify({
+      firmwareType: input.firmwareType, releaseType: "1", systemType: "1", firmwareVersion: input.firmwareVersion,
+      appVersion, deviceid: "", mac: null, uuid: "", queryType: 1, appKey: MOBILE_APP_KEY, deviceFunction: ""
+    })
+  })).data;
+  const data = await query(FIRMWARE_QUERY_APP_VERSION);
+  // A newer release is offered only to the app version COROS names.
+  const appVersion = firmwareQueryAppVersion(data, FIRMWARE_QUERY_APP_VERSION);
+  return appVersion ? query(appVersion) : data;
 }
 
 /** Lists paired watches from the authenticated account's mobile profile. */

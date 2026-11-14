@@ -332,6 +332,11 @@ export interface CorosLinkApi {
   getCorosWatchfaceSlots: () => Promise<import("../electron/corosBleWatchfaceTypes").CorosDirectWatchfaceInventory>;
   syncCorosWatchface: (previewId: string, target?: import("../electron/corosBleWatchfaceTypes").CorosDirectWatchfaceTarget) => Promise<import("../electron/corosBleWatchfaceTypes").CorosDirectWatchfaceStatus>;
   cancelCorosWatchfaceSync: () => Promise<void>;
+  getWatchFirmwareStatus: () => Promise<import("../electron/corosFirmwareTypes").FirmwareUpdateStatus>;
+  checkWatchFirmware: () => Promise<import("../electron/corosFirmwareTypes").FirmwareUpdateCheck>;
+  /** Null when the user declined the confirmation. */
+  installWatchFirmware: (checkId: string) => Promise<import("../electron/corosFirmwareTypes").FirmwareUpdateStatus | null>;
+  cancelWatchFirmware: () => Promise<void>;
   getCorosWatchfaceCompilerStatus: () => Promise<import("../electron/corosWatchfaceCompilerTypes").CorosWatchfaceCompilerStatus>;
   /** `fullColor` keeps images past 256 colors unquantized (AMOLED; larger BIN); `smoothEdges` re-encodes soft sprite edges (memory-in-pixel). Both experimental. */
   compileCorosDirectWatchface: (options?: { fullColor?: boolean; smoothEdges?: boolean }) => Promise<import("../electron/corosBleWatchfaceTypes").CorosDirectWatchfacePreview | null>;

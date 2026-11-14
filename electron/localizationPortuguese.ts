@@ -90,4 +90,14 @@ export const nativePortuguese: Readonly<Record<string, string>> = {
   "In the backup: key {{p0}}, {{p1}}.": "Na cópia de segurança: chave {{p0}}, {{p1}}.",
   "COROS account {{p0}}": "Conta COROS {{p0}}",
   "You're signed in to COROS with another account. Restoring signs you out, so one account's key is never used with another's sign-in.": "Tem sessão iniciada na COROS com outra conta. Restaurar termina essa sessão, para que a chave de uma conta nunca seja usada com a sessão de outra.",
+  // Firmware update confirmations (main.ts).
+  "Update watch": "Actualizar relógio",
+  "Update your watch to firmware {{p0}}?": "Actualizar o seu relógio para o firmware {{p0}}?",
+  "Sending the update takes about {{p0}} min. Keep your watch nearby and off its charger until then. Your watch then restarts to install it, which takes about {{p1}} min.": "Enviar a actualização demora cerca de {{p0}} min. Até lá, mantenha o relógio por perto e fora do carregador. Depois reinicia-se para a instalar, o que demora cerca de {{p1}} min.",
+  "Keep your watch nearby and off its charger until the transfer ends. Your watch then restarts to install the update.": "Mantenha o relógio por perto e fora do carregador até a transferência terminar. Depois reinicia-se para instalar a actualização.",
+  "Stop the firmware update?": "Parar a actualização de firmware?",
+  "Your watch keeps what it has received. Select Update watch in Settings → Watch firmware to finish the update.": "O relógio mantém o que já recebeu. Seleccione Actualizar relógio em Definições → Firmware do relógio para concluir a actualização.",
+  "Keep updating": "Continuar a actualizar",
+  "Stop and quit": "Parar e sair",
+  "Stop and disconnect": "Parar e desligar",
 };

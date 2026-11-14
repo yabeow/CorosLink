@@ -2,7 +2,7 @@
 
 export type SettingsPane =
   | "language" | "colors" | "sidebar"
-  | "profile" | "watch" | "weather"
+  | "profile" | "watch" | "firmware" | "weather"
   | "accounts" | "ai"
   | "privacy" | "storage" | "logs"
   | "about";
@@ -36,6 +36,7 @@ export const SETTINGS_GROUPS: readonly SettingsPaneGroup[] = [
     panes: [
       { id: "profile", label: "Training profile", keywords: ["Heart-rate zones", "Max heart rate (bpm)", "Resting heart rate (bpm)", "Threshold heart rate (bpm)"] },
       { id: "watch", label: "Watch settings", keywords: [] },
+      { id: "firmware", label: "Watch firmware", keywords: ["Firmware update", "Check for updates", "Update watch"] },
       { id: "weather", label: "Weather location", keywords: ["Weather", "Choose a place"] },
     ],
   },

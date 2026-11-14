@@ -169,7 +169,7 @@ async function main() {
     await js(`${mode('Connected Mode')}.focus(); void 0`);
     await key('ArrowRight');
     await until(`document.querySelector('.privacy-confirm') !== null`);
-    assert.match(await js(`document.querySelector('.privacy-confirm').textContent`), /Without COROS, Strava and TrainingPeaks stop receiving your activities, and the watch gets no firmware updates\./);
+    assert.match(await js(`document.querySelector('.privacy-confirm').textContent`), /Without COROS, Strava and TrainingPeaks stop receiving your activities\. Watch firmware updates still work while you're signed in to COROS\./);
     assert.match(await js(`document.querySelector('.privacy-confirm').textContent`), /Local-Only Mode starts empty: .*Your COROS workouts, calendar and activities stay in your COROS account/, 'why it starts empty');
     await shoot('dark-confirm');
     await js(`document.querySelector('.privacy-confirm .primary-button').click(); void 0`);

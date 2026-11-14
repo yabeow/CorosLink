@@ -4,7 +4,7 @@ Local-Only Mode keeps the athlete's data away from COROS. Activities and daily h
 
 It is **not an offline mode**:
 
-- **Reading from COROS keeps working:** Training Hub dashboards, COROS MCP queries, maps, watch-face themes and sign-in. Copying map areas over USB (Maps → Map areas → USB cable) asks COROS for the chosen areas' files (`mapstatic.coros.com`) and downloads them (`map-oss-us.coros.com`). No account or watch data is sent, but COROS sees this computer's address and which areas were chosen.
+- **Reading from COROS keeps working:** Training Hub dashboards, COROS MCP queries, maps, watch-face themes, sign-in and watch firmware updates (Settings → Watch firmware asks COROS which firmware comes next, sending the watch model, its firmware version and the account's session, and downloads the files from `s3.coros.com`). Copying map areas over USB (Maps → Map areas → USB cable) asks COROS for the chosen areas' files (`mapstatic.coros.com`) and downloads them (`map-oss-us.coros.com`). No account or watch data is sent, but COROS sees this computer's address and which areas were chosen.
 - **Every other service is untouched:** web fonts, Apple Music, Spotify, Strava, calendars, updates, Open-Meteo weather, AI providers and map tiles. Coach still sends what it reads, local activities included, to the AI provider the user picks.
 
 What is refused is anything that sends data *to* COROS: activity uploads and imports, workouts, plans and schedules, gear, watch-face publishing and sharing, and COROS MCP write tools.

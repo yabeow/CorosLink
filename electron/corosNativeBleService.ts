@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { app, safeStorage } from "electron";
+import { app, powerSaveBlocker, safeStorage } from "electron";
 import { getSetting, setSetting } from "./database";
 import type { CorosBleBackend, CorosNativeBleConnectOptions, CorosNativeBleSnapshot, CorosSyncCaptureEntry } from "./corosNativeBleTypes";
 import { BIND_MESSAGES, BIND_REASON, BIND_STATUS, bindRefusalMessage, CorosBindReplyError, CorosBleAccountAuth, describeBindReply, formatCorosWatchKeyId, watchReportsKeyId, type CorosAccountCredential } from "./corosBleAuth";
@@ -48,12 +48,20 @@ import {
 import type { CorosWifiMusicIdentity, CorosWifiMusicStatus } from "./corosWifiMusicTypes";
 import { connectedWatchfaceTarget, isValidatedWatch, watchfaceBinTarget, watchfaceTargetHardware, watchfaceTargetsForMagic, type WatchfaceTarget } from "./watchfaceTargets";
 import { qrCodeDataUrl } from "./qrCode";
+import { CorosFirmwareUpdater, type FirmwareWatch, type PendingFirmwareInstall } from "./corosFirmwareService";
+import { FirmwareUserError, firmwareVersionOf } from "./corosFirmwareProtocol";
+import type { FirmwareUpdateCheck, FirmwareUpdateStatus } from "./corosFirmwareTypes";
+import { getWatchfaceDeviceProfile } from "./watchModels";
 
 const BOND_SETTING = "coros.ble.bond";
 const AUTH_SETTING = "coros.ble.accountAuth";
 const STATE_SETTING = "coros.ble.stateDirectory";
 const BACKEND_SETTING = "coros.ble.backend";
 const DEVICE_SETTING = "coros.ble.systemDevice";
+/** An update the watch was told to install, until it comes back (corosFirmwareService.ts). */
+const FIRMWARE_PENDING_SETTING = "coros.firmware.pending";
+/** How long after a commit the link dropping is the watch restarting, not a failure. */
+const FIRMWARE_RESTART_QUIET_MS = 5 * 60_000;
 interface WorkerResponse { result: CorosNativeBleSnapshot; payload?: string }
 const emptyState = (): CorosNativeBleSnapshot => ({
   phase: "idle", available: false, connected: false, encrypted: false,
@@ -65,7 +73,7 @@ type ConnectMode = "user" | "internal" | "background";
 
 /** Everything that holds the watch link. busyWith() checks them all, so a new task can't be missed by one guard. */
 type LinkTask = "wifiMusic" | "wifiMusicRestore" | "activityScreen" | "localSync" | "push" | "musicInventory" | "musicDelete" |
-  "route" | "watchface" | "watchfaceInventory" | "mapStarting" | "mapRemoving" | "connecting" | "scanning" | "closing";
+  "route" | "watchface" | "watchfaceInventory" | "firmware" | "mapStarting" | "mapRemoving" | "connecting" | "scanning" | "closing";
 
 /** What the user is told when the watch is busy with a task (shown in the app as is). */
 const BUSY_MESSAGE: Record<LinkTask, string> = {
@@ -79,6 +87,7 @@ const BUSY_MESSAGE: Record<LinkTask, string> = {
   route: "Wait for the route to finish sending to the watch.",
   watchface: "Wait for the watch face to finish sending to the watch.",
   watchfaceInventory: "Wait for CorosLink to finish reading the watch faces on the watch.",
+  firmware: "Wait for the firmware update to finish.",
   mapStarting: "Wait for the map download to start.",
   mapRemoving: "Wait for the watch to cancel the map download.",
   connecting: "Wait for the watch to finish connecting.",
@@ -193,6 +202,7 @@ export class CorosNativeBleService {
       route: () => this.routeTask,
       watchface: () => this.watchfaceTask,
       watchfaceInventory: () => this.watchfaceInventoryTask,
+      firmware: () => this.firmwareTask,
       mapStarting: () => this.mapStarting,
       mapRemoving: () => this.mapRemoving,
       connecting: () => this.connecting,
@@ -334,7 +344,7 @@ export class CorosNativeBleService {
             this.trace.add(`helper ${response.event}`, response.detail);
             // A drop with nothing waiting has no IPC error to carry the trail. Closing
             // the helper (quit, disconnect) ends the link on purpose: not a drop.
-            if (response.event === "disconnected" && this.pending.size === 0 && this.stopping !== worker) {
+            if (response.event === "disconnected" && this.pending.size === 0 && this.stopping !== worker && Date.now() > this.restartExpectedUntil) {
               recordDiagnosticError("corosBle:link", this.bleError("The watch disconnected.", "link", response.detail));
             }
             // An answer can no longer reach the watch, so its question is withdrawn.
@@ -488,7 +498,8 @@ export class CorosNativeBleService {
     // Results are traced per operation; only link-level requests note when they began.
     if (["connect", "scan", "disconnect"].includes(operation)) this.trace.add(`${operation} sent`);
     return new Promise((resolve, reject) => {
-      const timeoutMs = operation === "connect" ? 120_000 : operation === "scan" ? 65_000 : operation === "exchange" ? 20_000 : 50_000;
+      const timeoutMs = operation === "connect" ? 120_000 : operation === "scan" ? 65_000
+        : operation === "exchange" ? (typeof extra.timeoutSeconds === "number" ? extra.timeoutSeconds * 1000 + 5_000 : 20_000) : 50_000;
       const timer = setTimeout(() => {
         this.trace.add(`${operation} timed out`, { timeoutMs });
         this.failWorker(worker, "The Bluetooth operation timed out. Keep the watch nearby and try again.");
@@ -547,7 +558,7 @@ export class CorosNativeBleService {
   connect(pair = false, options: CorosNativeBleConnectOptions = {}, mode: ConnectMode = "internal"): Promise<CorosNativeBleSnapshot> {
     // Transfers that connect on their own (pushes, routes) and an open connection a face or map
     // operation is using are left as they are: connecting then only reads the status.
-    const busy = this.busyWith("wifiMusicRestore", "push", "route", "watchface", "watchfaceInventory", "mapStarting", "connecting", "scanning");
+    const busy = this.busyWith("wifiMusicRestore", "push", "route", "watchface", "watchfaceInventory", "firmware", "mapStarting", "connecting", "scanning");
     if (busy) return Promise.reject(new Error(BUSY_MESSAGE[busy]));
     this.musicInventory = undefined;
     if (this.connecting) return this.connecting;
@@ -609,7 +620,10 @@ export class CorosNativeBleService {
         }
         setSetting(DEVICE_SETTING, JSON.stringify({ deviceName: this.state.deviceName, deviceId: this.state.deviceId }));
         await this.authenticateSystem();
-        if (this.state.systemBind === "authenticated") this.rememberIdentity("system", mode, this.state.deviceId, expected.confirmed, rotated);
+        if (this.state.systemBind === "authenticated") {
+          this.rememberIdentity("system", mode, this.state.deviceId, expected.confirmed, rotated);
+          this.observeFirmware();
+        }
         // The watch's own 12/24-hour setting is read before the clock is set, so setting it keeps that format.
         const switches = await this.readProfileOnConnect();
         await this.setWatchClock(switches);
@@ -1423,9 +1437,9 @@ export class CorosNativeBleService {
     return { sent: true, fragments: frames.length };
   }
 
-  private async controlCommand(opcode: number, payload: Buffer): Promise<Buffer> {
+  private async controlCommand(opcode: number, payload: Buffer, timeoutSeconds?: number): Promise<Buffer> {
     this.requireTransferSession();
-    const response = await this.send("exchange", { opcode, payload: payload.toString("base64"), maximumWriteBytes: 20 });
+    const response = await this.send("exchange", { opcode, payload: payload.toString("base64"), maximumWriteBytes: 20, ...(timeoutSeconds ? { timeoutSeconds } : {}) });
     if (typeof response.payload !== "string") throw new Error("The watch did not answer the Bluetooth command.");
     return Buffer.from(response.payload, "base64");
   }
@@ -2082,6 +2096,112 @@ export class CorosNativeBleService {
     return this.watchfaceTask;
   }
 
+  // ----- firmware updates (corosFirmwareService.ts) -----
+
+  /** A firmware check or update holds the link. */
+  private firmwareTask?: Promise<unknown>;
+  /** Until then the link dropping is the watch restarting to install an update, not a failure. */
+  private restartExpectedUntil = 0;
+  private readonly firmware = new CorosFirmwareUpdater({
+    link: {
+      watch: async () => {
+        await this.mapPolling?.catch(() => {});
+        await this.polling?.catch(() => {});
+        if (!this.state.connected) await this.connect(false);
+        return this.firmwareWatch();
+      },
+      current: () => this.firmwareWatch(),
+      battery: async () => {
+        this.firmwareWatch();
+        const state = await this.request("refresh");
+        return typeof state.batteryPercent === "number" ? state.batteryPercent : undefined;
+      },
+      exchange: (opcode, payload, timeoutSeconds) => { this.firmwareWatch(); return this.controlCommand(opcode, payload, timeoutSeconds); },
+      sendBlock: async (type, header, block) => {
+        this.firmwareWatch();
+        const reply = await this.send("firmwareBlock", { fileId: type, header: header.toString("base64"), block: block.toString("base64") });
+        return Buffer.from(typeof reply.payload === "string" ? reply.payload : "", "base64")[0] === 1;
+      },
+      reset: async () => { await this.closeLink().catch(() => this.stop()); },
+      restarting: () => {
+        this.restartExpectedUntil = Date.now() + FIRMWARE_RESTART_QUIET_MS;
+        this.trace.add("firmware committed", {});
+      }
+    },
+    // Loaded when used: the COROS client is large and the Bluetooth tests don't need it.
+    manifest: async (firmwareType, firmwareVersion) => (await import("./corosWatchfaceService.js")).queryCorosFirmware({ firmwareType, firmwareVersion }),
+    directory: () => path.join(app.getPath("userData"), "watch-firmware"),
+    pending: {
+      load: () => {
+        const saved = getSetting(FIRMWARE_PENDING_SETTING);
+        if (!saved) return undefined;
+        const value = JSON.parse(saved) as Partial<PendingFirmwareInstall>;
+        return typeof value.identity === "string" && typeof value.version === "string" && typeof value.fromVersion === "string" &&
+          typeof value.committedAt === "number" && typeof value.installSeconds === "number" ? value as PendingFirmwareInstall : undefined;
+      },
+      save: value => setSetting(FIRMWARE_PENDING_SETTING, value ? JSON.stringify(value) : "")
+    },
+    // Never the watch's identity: it is the serial number.
+    log: (event, detail) => recordDiagnosticNotice("corosBle:firmware", `${event} ${JSON.stringify(detail)}`)
+  });
+  /** Keeps the computer from sleeping through a transfer, which would drop the link. */
+  private firmwareAwake?: number;
+
+  /** The connected watch, when its firmware can be updated from here. */
+  private firmwareWatch(): FirmwareWatch {
+    if (!this.state.connected || this.state.systemBind !== "authenticated") throw new Error("The watch is not connected.");
+    if (this.backendInUse !== "system") throw new FirmwareUserError("Firmware updates need this computer's Bluetooth, not the USB adapter.");
+    this.requireWatchFeature("firmware");
+    const firmwareType = getWatchfaceDeviceProfile(this.watchTarget()?.model)?.firmwareType;
+    const version = firmwareVersionOf(this.state.firmwareRevision) ?? firmwareVersionOf(this.state.softwareRevision);
+    const identity = (this.state.serialNumber || this.state.deviceId || "").trim().toUpperCase();
+    if (!firmwareType || !version || !identity) throw new FirmwareUserError("Reconnect your watch so CorosLink can read its firmware version.");
+    return { firmwareType, version, identity };
+  }
+
+  /** After a sign-in: a watch back from installing an update shows whether it took. */
+  private observeFirmware(): void {
+    try { this.firmware.observe(this.firmwareWatch()); } catch { /* not a watch CorosLink updates */ }
+  }
+
+  firmwareUpdateStatus(): FirmwareUpdateStatus { return this.firmware.updateStatus(); }
+
+  /** A firmware download or transfer is under way (quitting and disconnecting ask first). */
+  firmwareUpdateRunning(): boolean { return this.firmware.running(); }
+
+  /** Asks COROS for the next firmware and the watch what it has; connects if needed. Changes nothing on the watch. */
+  checkFirmwareUpdate(): Promise<FirmwareUpdateCheck> {
+    const busy = this.busyWith();
+    if (busy) return Promise.reject(new Error(BUSY_MESSAGE[busy]));
+    const task = this.firmware.check();
+    this.firmwareTask = task;
+    return task.finally(() => { if (this.firmwareTask === task) this.firmwareTask = undefined; });
+  }
+
+  /**
+   * Starts the update a check offered. Resolves once it has started; the update reports
+   * through `firmwareUpdateStatus()`. Refusals that need no work reject.
+   */
+  async startFirmwareUpdate(checkId: string): Promise<FirmwareUpdateStatus> {
+    const busy = this.busyWith();
+    if (busy) throw new Error(BUSY_MESSAGE[busy]);
+    const task = this.firmware.install(checkId);
+    // A refusal that needs no work (an expired check, an install still pending) starts nothing.
+    if (!this.firmware.running()) await task;
+    this.firmwareTask = task;
+    if (this.firmwareAwake === undefined) this.firmwareAwake = powerSaveBlocker.start("prevent-app-suspension");
+    void task.catch(() => undefined).finally(() => {
+      if (this.firmwareTask === task) this.firmwareTask = undefined;
+      if (this.firmwareAwake !== undefined) { powerSaveBlocker.stop(this.firmwareAwake); this.firmwareAwake = undefined; }
+    });
+    return this.firmware.updateStatus();
+  }
+
+  cancelFirmwareUpdate(): void { this.firmware.cancel(); }
+
+  /** The version a firmware check offered and its estimates, for the confirmation before installing it. */
+  offeredFirmware(checkId: string): { version: string; transferSeconds?: number; installSeconds?: number } | undefined { return this.firmware.offered(checkId); }
+
   /** Disconnect has started: new work is refused while what is running finishes (FINISH_WATCH_WORK_MS). */
   private closing?: Promise<CorosNativeBleSnapshot>;
   /** The app is quitting: nothing new starts on the watch. */
@@ -2089,7 +2209,7 @@ export class CorosNativeBleService {
 
   /** A sync, transfer or settings write holds the link (quitting waits for it). */
   hasWatchWork(): boolean {
-    return Boolean(this.pushTask || this.localSyncTask || this.routeTask || this.watchfaceTask);
+    return Boolean(this.pushTask || this.localSyncTask || this.routeTask || this.watchfaceTask || this.firmwareTask);
   }
 
   /**
@@ -2097,11 +2217,13 @@ export class CorosNativeBleService {
    * stop at the next block and it starts no write after them. Never called from inside one of them.
    */
   private async finishWatchWork(timeoutMs: number): Promise<void> {
-    const running = [this.pushTask, this.localSyncTask, this.routeTask, this.watchfaceTask].filter(task => task !== undefined);
+    const running = [this.pushTask, this.localSyncTask, this.routeTask, this.watchfaceTask, this.firmwareTask].filter(task => task !== undefined);
     if (!running.length) return;
     if (this.localSyncTask) {
       try { this.localSyncCancel?.(); } catch { /* the wait below still applies */ }
     }
+    // A firmware transfer stops at the next block; one the watch was told to install is waited for.
+    this.firmware.cancel();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const finished = await Promise.race([Promise.allSettled(running).then(() => true), new Promise<false>(resolve => { timer = setTimeout(() => resolve(false), timeoutMs); })]);
     clearTimeout(timer);

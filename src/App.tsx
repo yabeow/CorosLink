@@ -3098,6 +3098,7 @@ export default function App() {
                 onSectionFocused={() => setSettingsFocus(null)}
                 initialAccountScreen={returnToAccountSettings}
                 onOpenAccount={openAccountSetup}
+                onOpenWatchfaces={() => setActiveView("watchfaces")}
                 api={api}
                 updateSnapshot={appUpdateSnapshot}
                 updateBusy={busy === "update-check"}

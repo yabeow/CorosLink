@@ -70,6 +70,16 @@ const french: Record<string, string> = {
   "In the backup: key {{p0}}, {{p1}}.": "Dans la sauvegarde : clé {{p0}}, {{p1}}.",
   "COROS account {{p0}}": "Compte COROS {{p0}}",
   "You're signed in to COROS with another account. Restoring signs you out, so one account's key is never used with another's sign-in.": "Vous êtes connecté à COROS avec un autre compte. La restauration vous déconnecte, pour que la clé d’un compte ne serve jamais avec la connexion d’un autre.",
+  // Firmware update confirmations (main.ts).
+  "Update watch": "Mettre à jour la montre",
+  "Update your watch to firmware {{p0}}?": "Mettre à jour votre montre avec le micrologiciel {{p0}} ?",
+  "Sending the update takes about {{p0}} min. Keep your watch nearby and off its charger until then. Your watch then restarts to install it, which takes about {{p1}} min.": "L’envoi de la mise à jour prend environ {{p0}} min. D’ici là, gardez votre montre à proximité et débranchée de son chargeur. Elle redémarre ensuite pour l’installer, ce qui prend environ {{p1}} min.",
+  "Keep your watch nearby and off its charger until the transfer ends. Your watch then restarts to install the update.": "Gardez votre montre à proximité et débranchée de son chargeur jusqu’à la fin du transfert. Elle redémarre ensuite pour installer la mise à jour.",
+  "Stop the firmware update?": "Arrêter la mise à jour du micrologiciel ?",
+  "Your watch keeps what it has received. Select Update watch in Settings → Watch firmware to finish the update.": "Votre montre conserve ce qu’elle a déjà reçu. Sélectionnez Mettre à jour la montre dans Réglages → Micrologiciel de la montre pour terminer la mise à jour.",
+  "Keep updating": "Poursuivre la mise à jour",
+  "Stop and quit": "Arrêter et quitter",
+  "Stop and disconnect": "Arrêter et déconnecter",
 };
 
 export function nativeText(source: string): string {

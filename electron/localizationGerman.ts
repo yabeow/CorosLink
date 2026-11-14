@@ -90,4 +90,14 @@ export const nativeGerman: Readonly<Record<string, string>> = {
   "In the backup: key {{p0}}, {{p1}}.": "In der Sicherung: Schlüssel {{p0}}, {{p1}}.",
   "COROS account {{p0}}": "COROS-Konto {{p0}}",
   "You're signed in to COROS with another account. Restoring signs you out, so one account's key is never used with another's sign-in.": "Du bist bei COROS mit einem anderen Konto angemeldet. Beim Wiederherstellen wirst du abgemeldet, damit der Schlüssel eines Kontos nie mit den Anmeldedaten eines anderen verwendet wird.",
+  // Firmware update confirmations (main.ts).
+  "Update watch": "Uhr aktualisieren",
+  "Update your watch to firmware {{p0}}?": "Deine Uhr auf die Firmware {{p0}} aktualisieren?",
+  "Sending the update takes about {{p0}} min. Keep your watch nearby and off its charger until then. Your watch then restarts to install it, which takes about {{p1}} min.": "Das Senden des Updates dauert etwa {{p0}} Min. Halte deine Uhr so lange in der Nähe und nicht am Ladegerät. Danach startet sie neu, um es zu installieren; das dauert etwa {{p1}} Min.",
+  "Keep your watch nearby and off its charger until the transfer ends. Your watch then restarts to install the update.": "Halte deine Uhr in der Nähe und nicht am Ladegerät, bis die Übertragung abgeschlossen ist. Danach startet sie neu, um das Update zu installieren.",
+  "Stop the firmware update?": "Firmware-Update anhalten?",
+  "Your watch keeps what it has received. Select Update watch in Settings → Watch firmware to finish the update.": "Deine Uhr behält, was sie schon erhalten hat. Wähle „Uhr aktualisieren“ unter Einstellungen → Uhren-Firmware, um das Update abzuschließen.",
+  "Keep updating": "Weiter aktualisieren",
+  "Stop and quit": "Anhalten und beenden",
+  "Stop and disconnect": "Anhalten und trennen",
 };

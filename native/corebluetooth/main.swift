@@ -42,6 +42,10 @@ final class BluetoothWorker: NSObject, CBCentralManagerDelegate, CBPeripheralDel
     var writeTarget: CBCharacteristic?
     var routeBlock = Data()
     var routeStage = ""
+    // A firmware block's data frames, sent a window at a time (the watch acknowledges each window).
+    var firmwareFrames: [Data] = []
+    var firmwareWindow = 0
+    var firmwareSent = 0
     var interactionSequence = 0
     var musicReceiver: CorosMusicPageReceiver?
     var syncReceiver: CorosSyncBlockReceiver?
@@ -123,7 +127,8 @@ final class BluetoothWorker: NSObject, CBCentralManagerDelegate, CBPeripheralDel
             writeFrames = stride(from: 0, to: logical.count, by: size).enumerated().map { index, offset in
                 Data([expectedOpcode, UInt8(count - index - 1)]) + logical.subdata(in: offset..<min(offset + size, logical.count))
             }
-            deadline(15, "The watch did not answer the COROS control request.")
+            // Most answers are immediate; a firmware check reads every component from storage first.
+            deadline(Double(min(max(current?["timeoutSeconds"] as? Int ?? 15, 5), 120)), "The watch did not answer the COROS control request.")
             flushWrites()
         case "musicInventoryPage":
             // Storage category 0 is local music (pages 0–255); 3 is NetEase, read whole (page -1).
@@ -179,18 +184,18 @@ final class BluetoothWorker: NSObject, CBCentralManagerDelegate, CBPeripheralDel
             writeTarget = write; writeFrames = values
             deadline(5, "Bluetooth did not finish sending the notification.")
             flushWrites()
-        case "routeBlock", "watchfaceBlock", "musicDelete", "officialOtaBlock", "lightMapOtaBlock", "dataFileBlock":
-            let ota = operation == "officialOtaBlock" || operation == "lightMapOtaBlock"
-            // Files the phone app pushes: a workout (41), weather (80), the training calendar (42) or GPS assistance (13, 68, 70); nothing else.
-            let dataFile = UInt8(exactly: current?["fileId"] as? Int ?? 255) ?? 255
-            let fileIndex: UInt8 = ota ? (UInt8(exactly: current?["fileId"] as? Int ?? 255) ?? 255)
-                : operation == "dataFileBlock" ? (pushedDataFiles.contains(dataFile) ? dataFile : 255)
+        case "routeBlock", "watchfaceBlock", "musicDelete", "dataFileBlock", "firmwareBlock":
+            let firmware = operation == "firmwareBlock"
+            // Files the phone app pushes: a workout (41), weather (80), the training calendar (42) or GPS assistance (13, 68, 70),
+            // and firmware components; nothing else.
+            let requested = UInt8(exactly: current?["fileId"] as? Int ?? 255) ?? 255
+            let fileIndex: UInt8 = firmware ? (firmwareFileTypes.contains(requested) ? requested : 255)
+                : operation == "dataFileBlock" ? (pushedDataFiles.contains(requested) ? requested : 255)
                 : operation == "musicDelete" ? 93 : operation == "watchfaceBlock" ? 8 : 0x14
             guard peripheral?.state == .connected, let headerText = current?["header"] as? String,
                   let blockText = current?["block"] as? String, let header = Data(base64Encoded: headerText),
-                  let block = Data(base64Encoded: blockText), validFileBlock(header, block, fileIndex),
-                  (operation != "officialOtaBlock" || validOfficialOtaBlock(header, block, fileIndex)),
-                  (operation != "lightMapOtaBlock" || validLightMapOtaBlock(header, block, fileIndex)),
+                  let block = Data(base64Encoded: blockText),
+                  firmware ? validFirmwareBlock(header, block, fileIndex) : validFileBlock(header, block, fileIndex),
                   let control = controlWrite(), control.properties.contains(.writeWithoutResponse),
                   let bulk = characteristics[channels[1].1.replacingOccurrences(of: "0001", with: "0002")],
                   bulk.properties.contains(.writeWithoutResponse) else {
@@ -201,6 +206,7 @@ final class BluetoothWorker: NSObject, CBCentralManagerDelegate, CBPeripheralDel
             }
             routeBlock = block; routeStage = "ready"; writeTarget = control; writeFrames = [header]
             if operation == "musicDelete" { musicDeleteReceiver = CorosMusicDeleteReceiver() }
+            firmwareFrames = []; firmwareSent = 0; firmwareWindow = 0
             deadline(15, "The watch did not accept the file transfer header.")
             flushWrites()
         case "disconnect":
@@ -253,6 +259,7 @@ final class BluetoothWorker: NSObject, CBCentralManagerDelegate, CBPeripheralDel
         capture = nil
         current = nil
         writeTarget = nil; routeBlock = Data(); routeStage = ""
+        firmwareFrames = []; firmwareSent = 0; firmwareWindow = 0
         musicReceiver = nil
         musicDeleteReceiver = nil
         syncReceiver = nil
@@ -306,6 +313,7 @@ final class BluetoothWorker: NSObject, CBCentralManagerDelegate, CBPeripheralDel
         }
         writeFrames.removeAll(); responseBytes = Data(); responseRemaining = nil
         writeTarget = nil; routeBlock = Data(); routeStage = ""
+        firmwareFrames = []; firmwareSent = 0; firmwareWindow = 0
         musicReceiver = nil
         musicDeleteReceiver = nil
         syncReceiver = nil
@@ -609,10 +617,17 @@ final class BluetoothWorker: NSObject, CBCentralManagerDelegate, CBPeripheralDel
             } catch { fail("The watch returned an invalid music delete response.") }
             return
         }
-        let ota = operation == "officialOtaBlock" || operation == "lightMapOtaBlock"
+        if operation == "firmwareBlock", uuid == controlNotify || uuid == bulkNotify {
+            // The watch acknowledges each window of data frames with 78 00 on the data channel: the next window may go.
+            if data.count >= 2, data.count <= (uuid == bulkNotify ? 4 : 2), data[0] == 0x78, data[1] == 0 {
+                if routeStage == "data", writeFrames.isEmpty, firmwareSent < firmwareFrames.count { sendFirmwareWindow() }
+                return
+            }
+            if uuid == controlNotify, data.first == 0x78 { acceptFirmwareReply(data); return }
+        }
         let dataFile = operation == "dataFileBlock"
-        if (operation == "routeBlock" || operation == "watchfaceBlock" || operation == "musicDelete" || ota || dataFile), uuid == controlNotify, data.first == 0x78 {
-            let fileIndex: UInt8 = ota || dataFile ? (UInt8(exactly: current?["fileId"] as? Int ?? 255) ?? 255) : operation == "musicDelete" ? 93 : operation == "watchfaceBlock" ? 8 : 0x14
+        if (operation == "routeBlock" || operation == "watchfaceBlock" || operation == "musicDelete" || dataFile), uuid == controlNotify, data.first == 0x78 {
+            let fileIndex: UInt8 = dataFile ? (UInt8(exactly: current?["fileId"] as? Int ?? 255) ?? 255) : operation == "musicDelete" ? 93 : operation == "watchfaceBlock" ? 8 : 0x14
             // A refusal is a single status byte (firmware: 2 busy, 3 bad header, 0x14/0x2b/0xfd file not accepted now).
             if data.count == 4, data[1] == 0, data[2] == data[3] {
                 fail("The watch refused the file transfer (code \(data[2]))."); return
@@ -622,10 +637,8 @@ final class BluetoothWorker: NSObject, CBCentralManagerDelegate, CBPeripheralDel
                 fail("Invalid COROS file acknowledgement."); return
             }
             if routeStage == "ready" {
-                if ota { responseBytes = data }
                 if data[2] == 1, (data.count == 9 ? data[6] == 1 : data[4] == fileIndex) { finishFileTransfer(); return }
                 guard data.count == 9, data[2] <= 1, data[6] == 1, data[4] >= 20,
-                      (!ota || data[7] == 3),
                       let bulk = characteristics[channels[1].1.replacingOccurrences(of: "0001", with: "0002")] else {
                     fail("The watch rejected the file transfer header."); return
                 }
@@ -633,10 +646,9 @@ final class BluetoothWorker: NSObject, CBCentralManagerDelegate, CBPeripheralDel
                 if data[2] == 1 { finishFileTransfer(); return }
                 let size = min(Int(data[4]), p.maximumWriteValueLength(for: .withoutResponse), 240) - 3
                 let count = (routeBlock.count + size - 1) / size
-                let window = ota ? Int(data[5]) : 256
-                guard size >= 17, count <= 256, window > 0 else { fail("The file block exceeds the negotiated packet limit."); return }
+                guard size >= 17, count <= 256 else { fail("The file block exceeds the negotiated packet limit."); return }
                 writeFrames = stride(from: 0, to: routeBlock.count, by: size).enumerated().map { sequence, offset in
-                    Data([0x78, UInt8(sequence % window), fileIndex]) + routeBlock.subdata(in: offset..<min(offset + size, routeBlock.count))
+                    Data([0x78, UInt8(sequence), fileIndex]) + routeBlock.subdata(in: offset..<min(offset + size, routeBlock.count))
                 }
                 routeStage = "complete"; writeTarget = bulk
                 deadline(20, "The watch did not acknowledge the file data block.")
@@ -646,7 +658,6 @@ final class BluetoothWorker: NSObject, CBCentralManagerDelegate, CBPeripheralDel
                       writeFrames.isEmpty else {
                     fail("The watch rejected the file data block."); return
                 }
-                if ota { responseBytes = data }
                 finishFileTransfer()
             }
             return
@@ -673,10 +684,52 @@ final class BluetoothWorker: NSObject, CBCentralManagerDelegate, CBPeripheralDel
         characteristics[channels[0].1.replacingOccurrences(of: "0001", with: "0002")]
     }
 
-    func finishFileTransfer() {
-        if operation == "officialOtaBlock" || operation == "lightMapOtaBlock" {
-            finish(extra: ["payload": responseBytes.base64EncodedString()]); return
+    /// A firmware block's acknowledgements: the header reply, then the block reply once the CRC is checked.
+    func acceptFirmwareReply(_ data: Data) {
+        let fileIndex = UInt8(exactly: current?["fileId"] as? Int ?? 255) ?? 255
+        // A refusal is a single status byte (firmware: 2 busy, 3 bad header, 0x14/0x2b/0xfd file not accepted now).
+        if data.count == 4, data[1] == 0, data[2] == data[3] { fail("The watch refused the firmware file (code \(data[2]))."); return }
+        guard (5...9).contains(data.count), data[1] == 0, data.dropFirst(2).dropLast().reduce(UInt8(0), { $0 &+ $1 }) == data.last else {
+            fail("Invalid COROS file acknowledgement."); return
         }
+        if routeStage == "ready" {
+            // [status, bound, MTU, window, 1, 3]; status 1 is a block the staging area already holds. A file ID the
+            // watch has no staging area for is answered "done" with mode 0, and one too large with 0x18.
+            if data.count == 8, data[6] == 0x18 { fail("The watch has no room for this firmware file."); return }
+            guard data.count == 9, data[6] == 1, data[7] == 3 else { fail("The watch doesn't take this firmware file."); return }
+            if data[2] == 1 { finish(extra: ["payload": Data([1]).base64EncodedString()]); return }
+            guard data[2] == 0, data[4] >= 20, data[5] > 0, let p = peripheral,
+                  let bulk = characteristics[channels[1].1.replacingOccurrences(of: "0001", with: "0002")] else {
+                fail("The watch rejected the firmware block header."); return
+            }
+            let size = min(Int(data[4]), p.maximumWriteValueLength(for: .withoutResponse), 240) - 3
+            guard size >= 17 else { fail("The file block exceeds the negotiated packet limit."); return }
+            // Sequence numbers count modulo the watch's window; it rejects a block whose frames skip one.
+            let window = Int(data[5])
+            firmwareFrames = stride(from: 0, to: routeBlock.count, by: size).enumerated().map { sequence, offset in
+                Data([0x78, UInt8(sequence % window), fileIndex]) + routeBlock.subdata(in: offset..<min(offset + size, routeBlock.count))
+            }
+            firmwareWindow = window; firmwareSent = 0
+            routeStage = "data"; writeTarget = bulk
+            sendFirmwareWindow()
+        } else if routeStage == "data" {
+            // [status, bound, file]: 1 once the stored block's CRC matches; [2, bound] when a frame went missing.
+            if data.count == 5, data[2] == 2 { fail("Part of the firmware block was lost on the way. Keep the watch close and try again."); return }
+            guard data.count == 6, data[4] == fileIndex, data[2] == 1 else { fail("The watch rejected the firmware block."); return }
+            guard firmwareSent == firmwareFrames.count, writeFrames.isEmpty else { fail("Invalid COROS file acknowledgement."); return }
+            finish(extra: ["payload": Data([0]).base64EncodedString()])
+        }
+    }
+
+    func sendFirmwareWindow() {
+        let end = min(firmwareSent + firmwareWindow, firmwareFrames.count)
+        writeFrames = Array(firmwareFrames[firmwareSent..<end])
+        firmwareSent = end
+        deadline(20, "The watch did not acknowledge the firmware data.")
+        flushWrites()
+    }
+
+    func finishFileTransfer() {
         guard let receiver = musicDeleteReceiver else { finish(); return }
         receiver.fileAcknowledged = true
         if let payload = receiver.result { finish(extra: ["payload": payload.base64EncodedString()]); return }
@@ -734,7 +787,7 @@ let pushedDataFiles: Set<UInt8> = [41, 80, 42, 13, 68, 70]
 let satelliteDataFiles: Set<UInt8> = [13, 68, 70]
 
 func fileLimit(_ fileIndex: UInt8) -> Int {
-    fileIndex == 9 ? 7025507 : fileIndex == 8 ? 0x320000 : satelliteDataFiles.contains(fileIndex) ? 262_144
+    fileIndex == 8 ? 0x320000 : satelliteDataFiles.contains(fileIndex) ? 262_144
         : pushedDataFiles.contains(fileIndex) ? 65_536 : 2_000_000
 }
 
@@ -742,7 +795,7 @@ func validFileBlock(_ header: Data, _ block: Data, _ fileIndex: UInt8) -> Bool {
     // A NetEase delete has storage category 3 at +16 (local music 0), in the same 21-byte header.
     if fileIndex == 93 && header.count == 21 && header[16] == 3 { return validNeteaseDeleteBlock(header, block) }
     guard header.count == 21, block.count > 0, block.count <= 4096,
-          (fileIndex == 8 || fileIndex == 0x14 || fileIndex == 93 || fileIndex == 9 || fileIndex == 50 || pushedDataFiles.contains(fileIndex)), Array(header.prefix(3)) == [0x78, 0, fileIndex],
+          (fileIndex == 8 || fileIndex == 0x14 || fileIndex == 93 || pushedDataFiles.contains(fileIndex)), Array(header.prefix(3)) == [0x78, 0, fileIndex],
           (fileIndex != 8 || header[16] < 10),
           // GPS assistance (13, 68, 70) carries a 24-bit hour in bytes 16–18; other files a single byte.
           satelliteDataFiles.contains(fileIndex) ? header[19] == 3 : Array(header[17..<20]) == [0, 0, 3] else { return false }
@@ -761,24 +814,20 @@ func validFileBlock(_ header: Data, _ block: Data, _ fileIndex: UInt8) -> Bool {
         header[2..<20].reduce(UInt8(0), { $0 &+ $1 }) == header[20]
 }
 
-// Development-only official W332 3.2008.0 rehearsal. The caller pins whole-file
-// SHA256 before transport; this helper independently bounds each raw block.
-func validOfficialOtaBlock(_ header: Data, _ block: Data, _ fileIndex: UInt8) -> Bool {
-    guard validFileBlock(header, block, fileIndex), fileIndex == 9 || fileIndex == 50,
-          header[16] == 0 else { return false }
-    let offset = (0..<4).reduce(0) { $0 | Int(header[3 + $1]) << ($1 * 8) }
-    let remaining = (0..<4).reduce(0) { $0 | Int(header[9 + $1]) << ($1 * 8) }
-    let total = fileIndex == 9 ? 7025507 : 285172
-    return offset % 4096 == 0 && offset + remaining == total && block.count == min(4096, remaining)
-}
+/// Firmware components an update carries and the watch stages over SendFile (electron/corosFirmwareProtocol.ts).
+let firmwareFileTypes: Set<UInt8> = [0, 1, 2, 7, 9, 11, 16, 17, 19, 21, 23, 43, 44, 45, 47, 48, 50, 52, 81, 91, 92, 94, 95, 96, 102]
+/// The largest staging area (type 2's); the watch checks each type's own.
+let firmwareFileLimit = 0x3000000
 
-// Only the locally pinned light map length is accepted on this separate path.
-// System9 continues to use the original-only operation and its existing bounds.
-func validLightMapOtaBlock(_ header: Data, _ block: Data, _ fileIndex: UInt8) -> Bool {
-    guard fileIndex == 50, validFileBlock(header, block, fileIndex), header[16] == 0 else { return false }
-    let offset = (0..<4).reduce(0) { $0 | Int(header[3 + $1]) << ($1 * 8) }
-    let remaining = (0..<4).reduce(0) { $0 | Int(header[9 + $1]) << ($1 * 8) }
-    return offset % 4096 == 0 && offset + remaining == 285318 && block.count == min(4096, remaining)
+/// One 4 KB block of a firmware file, sent from a 4 KB boundary, with no slot or flag bytes.
+func validFirmwareBlock(_ header: Data, _ block: Data, _ fileIndex: UInt8) -> Bool {
+    guard firmwareFileTypes.contains(fileIndex), header.count == 21, Array(header.prefix(3)) == [0x78, 0, fileIndex],
+          Array(header[16..<20]) == [0, 0, 0, 3], !block.isEmpty, block.count <= 4096 else { return false }
+    func little(_ offset: Int, _ count: Int) -> Int { (0..<count).reduce(0) { $0 | Int(header[offset + $1]) << ($1 * 8) } }
+    let offset = little(3, 4), remaining = little(9, 4)
+    return offset % 4096 == 0 && offset + remaining <= firmwareFileLimit && block.count == min(4096, remaining) &&
+        little(7, 2) == block.count && little(13, 2) == syncCrc16(block) && block.reduce(UInt8(0), { $0 &+ $1 }) == header[15] &&
+        header[2..<20].reduce(UInt8(0), { $0 &+ $1 }) == header[20]
 }
 
 // Read-only W332 music metadata (storage category 0, SFT file 93). This
